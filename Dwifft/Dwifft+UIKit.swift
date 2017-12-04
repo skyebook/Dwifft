@@ -125,7 +125,7 @@ public final class TableViewDiffCalculator<Section: Equatable, Value: Equatable>
 /// This class manages a `UICollectionView`'s items and sections. It will make the necessary
 /// calls to the collection view to ensure that its UI is kept in sync with the contents 
 /// of the `sectionedValues` property.
-public final class CollectionViewDiffCalculator<Section: Equatable, Value: Equatable> : AbstractDiffCalculator<Section, Value> {
+public class CollectionViewDiffCalculator<Section: Equatable, Value: Equatable> : AbstractDiffCalculator<Section, Value> {
 
     /// The collection view to be managed.
     public weak var collectionView: UICollectionView?
@@ -153,6 +153,40 @@ public final class CollectionViewDiffCalculator<Section: Equatable, Value: Equat
                 }
             }
         }, completion: nil)
+    }
+}
+    
+/// This class manages a `UICollectionView`'s items and sections. It will make the necessary
+/// calls to the collection view to ensure that its UI is kept in sync with the contents
+/// of the `sectionedValues` property.
+public final class SafeCollectionViewDiffCalculator<Section: Equatable, Value: Equatable> : CollectionViewDiffCalculator<Section, Value> {
+
+    public weak var window: UIWindow?
+    
+    /// Initializes a new diff calculator.
+    ///
+    /// - Parameters:
+    ///   - collectionView: the collection view to be managed.
+    ///   - initialSectionedValues: optional - if specified, these will be the initial contents of the diff calculator.
+    public init(collectionView: UICollectionView?, initialSectionedValues: SectionedValues<Section, Value> = SectionedValues(), window: UIWindow? = UIApplication.shared.keyWindow) {
+        self.window = window
+        super.init(collectionView: collectionView, initialSectionedValues: initialSectionedValues)
+    }
+    
+    override fileprivate func processChanges(newState: SectionedValues<Section, Value>, diff: [SectionedDiffStep<Section, Value>]) {
+        guard let collectionView = self.collectionView else { return }
+        
+        if let window = window {
+            // If the collection view is offscreen, just reload data
+            if !collectionView.isDescendant(of: window) {
+                self._sectionedValues = newState
+                collectionView.reloadData()
+                return
+            }
+        }
+        
+        // If the view is on-screen, performBatchUpdates as usual
+        super.processChanges(newState: newState, diff: diff)
     }
 }
 
@@ -257,11 +291,11 @@ public final class SingleSectionCollectionViewDiffCalculator<Value: Equatable> {
     ///   - sectionIndex: optional - all insertion/deletion calls will be made on this index.
     public init(collectionView: UICollectionView?, initialItems: [Value] = [], sectionIndex: Int = 0) {
         self.collectionView = collectionView
-        self.internalDiffCalculator = CollectionViewDiffCalculator(collectionView: collectionView, initialSectionedValues: SingleSectionTableViewDiffCalculator.buildSectionedValues(values: initialItems, sectionIndex: sectionIndex))
+        self.internalDiffCalculator = SafeCollectionViewDiffCalculator(collectionView: collectionView, initialSectionedValues: SingleSectionTableViewDiffCalculator.buildSectionedValues(values: initialItems, sectionIndex: sectionIndex))
         self.sectionIndex = sectionIndex
     }
 
-    private let internalDiffCalculator: CollectionViewDiffCalculator<Int, Value>
+    private let internalDiffCalculator: SafeCollectionViewDiffCalculator<Int, Value>
     
 }
 
