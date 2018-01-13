@@ -126,6 +126,9 @@ public final class TableViewDiffCalculator<Section: Equatable, Value: Equatable>
 /// calls to the collection view to ensure that its UI is kept in sync with the contents 
 /// of the `sectionedValues` property.
 public class CollectionViewDiffCalculator<Section: Equatable, Value: Equatable> : AbstractDiffCalculator<Section, Value> {
+    
+    /// You may optionally use reloadData and reloadItems rather than performBatchUpdates internally. This is less efficient and does not animate nicely, but will not break layouts for self-sizing cells.
+    public var useReloadsInsteadOfBatchUpdates: Bool = false
 
     /// The collection view to be managed.
     public weak var collectionView: UICollectionView?
@@ -142,17 +145,76 @@ public class CollectionViewDiffCalculator<Section: Equatable, Value: Equatable> 
 
     override fileprivate func processChanges(newState: SectionedValues<Section, Value>, diff: [SectionedDiffStep<Section, Value>]) {
         guard let collectionView = self.collectionView else { return }
-        collectionView.performBatchUpdates({
-            self._sectionedValues = newState
-            for result in diff {
-                switch result {
-                case let .delete(section, row, _): collectionView.deleteItems(at: [IndexPath(row: row, section: section)])
-                case let .insert(section, row, _): collectionView.insertItems(at: [IndexPath(row: row, section: section)])
-                case let .sectionDelete(section, _): collectionView.deleteSections(IndexSet(integer: section))
-                case let .sectionInsert(section, _): collectionView.insertSections(IndexSet(integer: section))
+        
+        self._sectionedValues = newState
+        collectionView.reloadData()
+        return
+        
+        if useReloadsInsteadOfBatchUpdates {
+            collectionView.reloadData()
+            return
+            
+            /// The lowest index paths for each section
+            var lowestIndexPaths: [Int: IndexPath] = [:]
+            
+            var sectionsToReload = NSMutableIndexSet()
+            
+            func compareForLowest(indexPath: IndexPath) {
+                guard let currentLowest = lowestIndexPaths[indexPath.section] else {
+                    lowestIndexPaths[indexPath.section] = indexPath
+                    return
+                }
+                
+                if indexPath.row < currentLowest.row {
+                    lowestIndexPaths[indexPath.section] = indexPath
                 }
             }
-        }, completion: nil)
+            
+            for result in diff {
+                switch result {
+                case let .delete(section, row, _): sectionsToReload.add(section)
+                case let .insert(section, row, _): compareForLowest(indexPath: IndexPath(row: row, section: section))
+                case let .sectionDelete(section, _): sectionsToReload.add(section)
+                case let .sectionInsert(section, _): sectionsToReload.add(section)
+                }
+            }
+            
+            self._sectionedValues = newState
+            
+            // Strip the sections already being reloaded
+            sectionsToReload.forEach{lowestIndexPaths.removeValue(forKey: $0)}
+            
+            // Generate index paths for each section
+            var indexPaths: [IndexPath] = []
+            lowestIndexPaths.forEach({ (entry) in
+                // Within each section, start from the lowest insertion point and reload to the end
+                for i in entry.value.row...self._sectionedValues[entry.value.section].1.count-1 {
+                    indexPaths.append(IndexPath(row: i, section: entry.value.section))
+                }
+            })
+            
+            let indexSet = IndexSet(sectionsToReload.filter {return $0 >= 0})
+            if !indexSet.isEmpty {
+                collectionView.reloadSections(indexSet)
+            }
+            
+            if !indexPaths.isEmpty {
+                collectionView.reloadItems(at: indexPaths)
+            }
+        }
+        else {
+            collectionView.performBatchUpdates({
+                self._sectionedValues = newState
+                for result in diff {
+                    switch result {
+                    case let .delete(section, row, _): collectionView.deleteItems(at: [IndexPath(row: row, section: section)])
+                    case let .insert(section, row, _): collectionView.insertItems(at: [IndexPath(row: row, section: section)])
+                    case let .sectionDelete(section, _): collectionView.deleteSections(IndexSet(integer: section))
+                    case let .sectionInsert(section, _): collectionView.insertSections(IndexSet(integer: section))
+                    }
+                }
+            }, completion: nil)
+        }
     }
 }
     
@@ -265,6 +327,13 @@ public final class SingleSectionTableViewDiffCalculator<Value: Equatable> {
 /// do so only if it *really* doesn't make sense to just power your whole view with a `CollectionViewDiffCalculator`.
 /// You'll be less likely to mess up the index math :P
 public final class SingleSectionCollectionViewDiffCalculator<Value: Equatable> {
+    
+    /// You may optionally use reloadData and reloadItems rather than performBatchUpdates internally. This is less efficient and does not animate nicely, but will not break layouts for self-sizing cells.
+    public var useReloadsInsteadOfBatchUpdates: Bool = false {
+        didSet {
+            self.internalDiffCalculator.useReloadsInsteadOfBatchUpdates = useReloadsInsteadOfBatchUpdates
+        }
+    }
 
     /// The collection view to be managed
     public weak var collectionView: UICollectionView?
@@ -292,6 +361,7 @@ public final class SingleSectionCollectionViewDiffCalculator<Value: Equatable> {
     public init(collectionView: UICollectionView?, initialItems: [Value] = [], sectionIndex: Int = 0) {
         self.collectionView = collectionView
         self.internalDiffCalculator = SafeCollectionViewDiffCalculator(collectionView: collectionView, initialSectionedValues: SingleSectionTableViewDiffCalculator.buildSectionedValues(values: initialItems, sectionIndex: sectionIndex))
+        self.internalDiffCalculator.useReloadsInsteadOfBatchUpdates = useReloadsInsteadOfBatchUpdates
         self.sectionIndex = sectionIndex
     }
 
